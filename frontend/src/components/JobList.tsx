@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { getJobs } from '../api/client.ts';
+import { useState, useEffect, type MouseEvent } from 'react';
+import { getJobs, deleteJob } from '../api/client.ts';
 import { CrawlerDashboard } from './CrawlerDashboard.tsx';
 import type { CrawlJob } from '../types.ts';
 
@@ -28,6 +28,12 @@ export function JobList({ focusJobId, onFocusConsumed }: Props) {
     return () => clearInterval(interval);
   }, []);
 
+  const handleRemove = (e: MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!window.confirm('Remove this job from the list?')) return;
+    deleteJob(id).then(() => getJobs().then(setJobs)).catch(() => {});
+  };
+
   const formatDate = (epoch: number) => new Date(epoch).toLocaleString();
 
   if (selectedJobId) {
@@ -54,8 +60,10 @@ export function JobList({ focusJobId, onFocusConsumed }: Props) {
               <th>Job ID</th>
               <th>Origin URL</th>
               <th>Status</th>
+              <th>List</th>
               <th>Pages</th>
               <th>Started</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -66,8 +74,26 @@ export function JobList({ focusJobId, onFocusConsumed }: Props) {
                 <td>
                   <span className={`badge badge-${job.status}`}>{job.status}</span>
                 </td>
+                <td>
+                  {job.isActive ? (
+                    <span className="badge badge-running">active</span>
+                  ) : (
+                    <span className="badge badge-inactive">removed</span>
+                  )}
+                </td>
                 <td>{job.pagesCrawled}</td>
                 <td>{formatDate(job.createdAt)}</td>
+                <td>
+                  {job.isActive && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={e => handleRemove(e, job.jobId)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

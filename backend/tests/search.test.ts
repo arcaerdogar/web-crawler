@@ -1,25 +1,29 @@
-import db from '../src/db.js';
+import { closeDb, wordIndexRepo } from '../src/db/index.js';
 import { SearchEngine } from '../src/search.js';
 
-const insertWord = db.prepare(
-  'INSERT OR REPLACE INTO word_index (word, url, origin_url, depth, frequency) VALUES (?, ?, ?, ?, ?)'
-);
-
 function seedTestData() {
-  const insert = db.transaction(() => {
-    insertWord.run('typescript', 'https://example.com/ts', 'https://example.com', 0, 10);
-    insertWord.run('javascript', 'https://example.com/ts', 'https://example.com', 0, 5);
-    insertWord.run('typescript', 'https://example.com/docs', 'https://example.com', 1, 8);
-    insertWord.run('react', 'https://example.com/react', 'https://example.com', 1, 15);
-    insertWord.run('typescript', 'https://example.com/react', 'https://example.com', 1, 3);
-    insertWord.run('node', 'https://example.com/node', 'https://example.com', 2, 20);
-    insertWord.run('javascript', 'https://example.com/node', 'https://example.com', 2, 12);
-  });
-  insert();
+  const rows: Array<{
+    word: string;
+    url: string;
+    originUrl: string;
+    depth: number;
+    frequency: number;
+  }> = [
+    { word: 'typescript', url: 'https://example.com/ts', originUrl: 'https://example.com', depth: 0, frequency: 10 },
+    { word: 'javascript', url: 'https://example.com/ts', originUrl: 'https://example.com', depth: 0, frequency: 5 },
+    { word: 'typescript', url: 'https://example.com/docs', originUrl: 'https://example.com', depth: 1, frequency: 8 },
+    { word: 'react', url: 'https://example.com/react', originUrl: 'https://example.com', depth: 1, frequency: 15 },
+    { word: 'typescript', url: 'https://example.com/react', originUrl: 'https://example.com', depth: 1, frequency: 3 },
+    { word: 'node', url: 'https://example.com/node', originUrl: 'https://example.com', depth: 2, frequency: 20 },
+    { word: 'javascript', url: 'https://example.com/node', originUrl: 'https://example.com', depth: 2, frequency: 12 },
+  ];
+  for (const r of rows) {
+    wordIndexRepo.upsertWordIndexEntry(r);
+  }
 }
 
 function cleanTestData() {
-  db.prepare('DELETE FROM word_index').run();
+  wordIndexRepo.clearWordIndex();
 }
 
 describe('SearchEngine', () => {
@@ -31,7 +35,7 @@ describe('SearchEngine', () => {
   });
 
   afterAll(() => {
-    db.close();
+    closeDb();
   });
 
   it('returns results for a single-word query', () => {

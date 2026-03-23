@@ -48,11 +48,11 @@ export function CrawlerForm({ onJobStarted }: Props) {
 
       <div className="form-row">
         <div className="form-group">
-          <label htmlFor="maxDepth">Max Depth (1-10)</label>
+          <label htmlFor="maxDepth">Max Depth (0-10)</label>
           <input
             id="maxDepth"
             type="number"
-            min={1}
+            min={0}
             max={10}
             value={maxDepth}
             onChange={e => setMaxDepth(Number(e.target.value))}

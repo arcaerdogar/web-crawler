@@ -15,6 +15,7 @@ export interface CrawlJob {
   pagesQueued: number;
   createdAt: number;
   finishedAt: number | null;
+  isActive: boolean;
 }
 
 /** GET /api/jobs/:jobId — job row + live stats fields */

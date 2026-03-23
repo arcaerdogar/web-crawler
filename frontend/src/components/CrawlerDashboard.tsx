@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { useCrawlerSSE } from '../hooks/useCrawlerSSE.ts';
-import { stopJob, restartJob, getJob } from '../api/client.ts';
+import { stopJob, restartJob, getJob, deleteJob } from '../api/client.ts';
 import type { CrawlJob, CrawlStats, JobDetail } from '../types.ts';
 
 interface Props {
@@ -27,6 +27,7 @@ export function CrawlerDashboard({ jobId, job }: Props) {
   const [resumed, setResumed] = useState(false);
   const [stopped, setStopped] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [detail, setDetail] = useState<JobDetail | null>(null);
 
   const refreshDetail = useCallback(() => {
@@ -83,8 +84,22 @@ export function CrawlerDashboard({ jobId, job }: Props) {
     }
   };
 
+  const handleSoftDelete = async () => {
+    if (!window.confirm('Remove this job from the active list? Crawl history in search stays.')) return;
+    setDeleting(true);
+    try {
+      await deleteJob(jobId);
+      refreshDetail();
+    } catch {
+      // ignore
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const finished = (done || stopped || (base != null && base.status !== 'running')) && !resumed;
-  const canRestart = finished && !restarting;
+  const jobActive = base?.isActive !== false;
+  const canRestart = finished && !restarting && jobActive;
 
   const statusLabel = (() => {
     if (resumed && !done) return 'running';
@@ -112,7 +127,10 @@ export function CrawlerDashboard({ jobId, job }: Props) {
           {base && <p className="dashboard-url">{base.originUrl}</p>}
         </div>
         <div className="dashboard-actions">
-          {viewingLiveLogs && !finished && (
+          {!jobActive && (
+            <span className="badge badge-inactive">Removed from list</span>
+          )}
+          {viewingLiveLogs && !finished && jobActive && (
             <button className="btn btn-danger" onClick={handleStop}>Stop Crawl</button>
           )}
           {finished && (
@@ -124,6 +142,16 @@ export function CrawlerDashboard({ jobId, job }: Props) {
                 </button>
               )}
             </>
+          )}
+          {jobActive && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={deleting}
+              onClick={handleSoftDelete}
+            >
+              {deleting ? 'Removing…' : 'Remove from list'}
+            </button>
           )}
         </div>
       </div>

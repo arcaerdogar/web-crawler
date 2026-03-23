@@ -28,8 +28,24 @@ export async function getJob(jobId: string): Promise<JobDetail> {
 }
 
 export async function stopJob(jobId: string): Promise<void> {
-  const res = await fetch(`${BASE}/jobs/${jobId}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Failed to stop job');
+  const res = await fetch(`${BASE}/jobs/${encodeURIComponent(jobId)}/stop`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Failed to stop job');
+  }
+}
+
+/** Soft delete: clears queue, marks job inactive; history kept. */
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${BASE}/jobs/${encodeURIComponent(jobId)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Failed to delete job');
+  }
 }
 
 export async function restartJob(jobId: string): Promise<{ jobId: string }> {

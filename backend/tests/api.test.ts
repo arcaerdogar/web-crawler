@@ -1,20 +1,13 @@
 import request from 'supertest';
 import { app } from '../src/server.js';
-import db from '../src/db.js';
-
-function cleanDb() {
-  db.prepare('DELETE FROM word_index').run();
-  db.prepare('DELETE FROM crawl_jobs').run();
-  db.prepare('DELETE FROM url_queue').run();
-  db.prepare('DELETE FROM visited_urls').run();
-}
+import { closeDb, crawlJobsRepo, resetAllTables, wordIndexRepo } from '../src/db/index.js';
 
 beforeEach(() => {
-  cleanDb();
+  resetAllTables();
 });
 
 afterAll(() => {
-  db.close();
+  closeDb();
 });
 
 describe('POST /api/index', () => {
@@ -48,10 +41,26 @@ describe('POST /api/index', () => {
     expect(res.body.error).toContain('valid URL');
   });
 
-  it('returns 400 when maxDepth is below 1', async () => {
+  it('returns 201 when maxDepth is 0', async () => {
     const res = await request(app)
       .post('/api/index')
-      .send({ url: 'https://example.com', maxDepth: 0 });
+      .send({
+        url: 'https://example.com',
+        maxDepth: 0,
+        rateLimit: 5,
+        maxQueueSize: 100,
+        workerCount: 1,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toHaveProperty('jobId');
+    await request(app).delete(`/api/jobs/${res.body.jobId}`);
+  });
+
+  it('returns 400 when maxDepth is negative', async () => {
+    const res = await request(app)
+      .post('/api/index')
+      .send({ url: 'https://example.com', maxDepth: -1 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('maxDepth');
@@ -132,10 +141,10 @@ describe('POST /api/index', () => {
       .post('/api/index')
       .send({ url: 'https://example.com', maxDepth: 1, workerCount: 1 });
 
-    const row = db.prepare('SELECT * FROM crawl_jobs WHERE job_id = ?').get(res.body.jobId) as Record<string, unknown>;
+    const row = crawlJobsRepo.findCrawlJobById(res.body.jobId);
     expect(row).toBeDefined();
-    expect(row['origin_url']).toBe('https://example.com');
-    expect(row['status']).toBe('running');
+    expect(row!.origin_url).toBe('https://example.com');
+    expect(row!.status).toBe('running');
 
     await request(app).delete(`/api/jobs/${res.body.jobId}`);
   });
@@ -149,13 +158,25 @@ describe('GET /api/jobs', () => {
   });
 
   it('returns jobs ordered by created_at DESC', async () => {
-    db.prepare(
-      'INSERT INTO crawl_jobs (job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run('job_a', 'https://a.com', 2, 'completed', 10, 0, 1000);
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'job_a',
+      originUrl: 'https://a.com',
+      maxDepth: 2,
+      status: 'completed',
+      pagesCrawled: 10,
+      pagesQueued: 0,
+      createdAt: 1000,
+    });
 
-    db.prepare(
-      'INSERT INTO crawl_jobs (job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run('job_b', 'https://b.com', 3, 'running', 5, 20, 2000);
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'job_b',
+      originUrl: 'https://b.com',
+      maxDepth: 3,
+      status: 'running',
+      pagesCrawled: 5,
+      pagesQueued: 20,
+      createdAt: 2000,
+    });
 
     const res = await request(app).get('/api/jobs');
 
@@ -166,9 +187,16 @@ describe('GET /api/jobs', () => {
   });
 
   it('returns properly mapped camelCase fields', async () => {
-    db.prepare(
-      'INSERT INTO crawl_jobs (job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run('job_map', 'https://test.com', 5, 'completed', 42, 0, 1234567890, 1234567999);
+    crawlJobsRepo.insertCrawlJobSeedWithFinishedAt({
+      jobId: 'job_map',
+      originUrl: 'https://test.com',
+      maxDepth: 5,
+      status: 'completed',
+      pagesCrawled: 42,
+      pagesQueued: 0,
+      createdAt: 1234567890,
+      finishedAt: 1234567999,
+    });
 
     const res = await request(app).get('/api/jobs');
     const job = res.body[0];
@@ -181,6 +209,7 @@ describe('GET /api/jobs', () => {
     expect(job).toHaveProperty('pagesQueued', 0);
     expect(job).toHaveProperty('createdAt', 1234567890);
     expect(job).toHaveProperty('finishedAt', 1234567999);
+    expect(job).toHaveProperty('isActive', true);
   });
 });
 
@@ -192,9 +221,16 @@ describe('GET /api/jobs/:jobId', () => {
   });
 
   it('returns job detail with stats fields from database', async () => {
-    db.prepare(
-      'INSERT INTO crawl_jobs (job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run('job_detail', 'https://detail.com', 3, 'interrupted', 7, 12, 111, 222);
+    crawlJobsRepo.insertCrawlJobSeedWithFinishedAt({
+      jobId: 'job_detail',
+      originUrl: 'https://detail.com',
+      maxDepth: 3,
+      status: 'interrupted',
+      pagesCrawled: 7,
+      pagesQueued: 12,
+      createdAt: 111,
+      finishedAt: 222,
+    });
 
     const res = await request(app).get('/api/jobs/job_detail');
 
@@ -212,46 +248,110 @@ describe('GET /api/jobs/:jobId', () => {
     expect(res.body.backPressure).toBe(false);
     expect(res.body.rps).toBe(0);
     expect(res.body.droppedUrls).toBe(0);
+    expect(res.body.isActive).toBe(true);
+  });
+});
+
+describe('POST /api/jobs/:jobId/stop', () => {
+  it('returns 404 when job does not exist', async () => {
+    const res = await request(app).post('/api/jobs/missing/stop');
+    expect(res.status).toBe(404);
+  });
+
+  it('marks running seed job interrupted without removing from list', async () => {
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'stop_me',
+      originUrl: 'https://example.com',
+      maxDepth: 1,
+      status: 'running',
+      pagesCrawled: 0,
+      pagesQueued: 2,
+      createdAt: Date.now(),
+    });
+
+    const res = await request(app).post('/api/jobs/stop_me/stop');
+    expect(res.status).toBe(200);
+    const row = crawlJobsRepo.findCrawlJobById('stop_me');
+    expect(row?.status).toBe('interrupted');
+    expect(row?.is_active).toBe(1);
   });
 });
 
 describe('DELETE /api/jobs/:jobId', () => {
   it('returns ok for existing job', async () => {
-    db.prepare(
-      'INSERT INTO crawl_jobs (job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run('del_job', 'https://example.com', 2, 'running', 0, 0, Date.now());
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'del_job',
+      originUrl: 'https://example.com',
+      maxDepth: 2,
+      status: 'running',
+      pagesCrawled: 0,
+      pagesQueued: 0,
+      createdAt: Date.now(),
+    });
 
     const res = await request(app).delete('/api/jobs/del_job');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
   });
 
-  it('marks non-engine job as interrupted in database', async () => {
-    db.prepare(
-      'INSERT INTO crawl_jobs (job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run('del_job2', 'https://example.com', 2, 'running', 0, 0, Date.now());
+  it('soft-deletes job: interrupted if was running, is_active 0', async () => {
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'del_job2',
+      originUrl: 'https://example.com',
+      maxDepth: 2,
+      status: 'running',
+      pagesCrawled: 0,
+      pagesQueued: 0,
+      createdAt: Date.now(),
+    });
 
     await request(app).delete('/api/jobs/del_job2');
 
-    const row = db.prepare('SELECT status FROM crawl_jobs WHERE job_id = ?').get('del_job2') as Record<string, unknown>;
-    expect(row['status']).toBe('interrupted');
+    const row = crawlJobsRepo.findCrawlJobById('del_job2');
+    expect(row?.status).toBe('interrupted');
+    expect(row?.is_active).toBe(0);
   });
 
-  it('returns ok even for non-existent job', async () => {
+  it('returns 404 for non-existent job', async () => {
     const res = await request(app).delete('/api/jobs/nonexistent');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(res.status).toBe(404);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  it('GET /api/jobs still returns soft-deleted job with isActive false', async () => {
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'soft_del',
+      originUrl: 'https://x.com',
+      maxDepth: 1,
+      status: 'completed',
+      pagesCrawled: 1,
+      pagesQueued: 0,
+      createdAt: 1,
+    });
+    await request(app).delete('/api/jobs/soft_del');
+    const list = await request(app).get('/api/jobs');
+    const j = list.body.find((x: { jobId: string }) => x.jobId === 'soft_del');
+    expect(j).toBeDefined();
+    expect(j.isActive).toBe(false);
   });
 });
 
 describe('GET /api/search', () => {
   beforeEach(() => {
-    db.prepare(
-      'INSERT OR REPLACE INTO word_index (word, url, origin_url, depth, frequency) VALUES (?, ?, ?, ?, ?)'
-    ).run('typescript', 'https://example.com/ts', 'https://example.com', 0, 10);
-    db.prepare(
-      'INSERT OR REPLACE INTO word_index (word, url, origin_url, depth, frequency) VALUES (?, ?, ?, ?, ?)'
-    ).run('javascript', 'https://example.com/js', 'https://example.com', 1, 5);
+    wordIndexRepo.upsertWordIndexEntry({
+      word: 'typescript',
+      url: 'https://example.com/ts',
+      originUrl: 'https://example.com',
+      depth: 0,
+      frequency: 10,
+    });
+    wordIndexRepo.upsertWordIndexEntry({
+      word: 'javascript',
+      url: 'https://example.com/js',
+      originUrl: 'https://example.com',
+      depth: 1,
+      frequency: 5,
+    });
   });
 
   it('returns search results for valid query', async () => {

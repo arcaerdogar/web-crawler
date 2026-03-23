@@ -15,6 +15,8 @@ export interface CrawlJob {
   pagesQueued: number;
   createdAt: number;
   finishedAt: number | null;
+  /** false = soft-deleted; row kept for history / search side-effects */
+  isActive: boolean;
 }
 
 export interface CrawlStats {

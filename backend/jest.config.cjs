@@ -16,7 +16,8 @@ module.exports = {
         target: 'ES2022',
         strict: true,
         esModuleInterop: true,
-        skipLibCheck: true
+        skipLibCheck: true,
+        types: ['node', 'jest']
       }
     }]
   },
