@@ -6,7 +6,9 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "jest --config jest.config.cjs"
+    "test": "jest --config jest.config.cjs",
+    "export-crawl-data": "tsx scripts/export-crawl-data.ts",
+    "export-crawl-data:full": "tsx scripts/export-crawl-data.ts --full"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
