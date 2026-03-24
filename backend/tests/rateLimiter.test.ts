@@ -53,4 +53,17 @@ describe('RateLimiter', () => {
     expect(elapsed).toBeGreaterThanOrEqual(30);
     expect(elapsed).toBeLessThan(150);
   });
+
+  it('serializes concurrent wait() so global cap holds (e.g. parallel workers)', async () => {
+    const rps = 10;
+    const limiter = new RateLimiter(rps);
+    const gap = 1000 / rps;
+
+    const start = Date.now();
+    await Promise.all([limiter.wait(), limiter.wait(), limiter.wait()]);
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeGreaterThanOrEqual(2 * gap - 30);
+    expect(elapsed).toBeLessThan(2 * gap + 150);
+  });
 });

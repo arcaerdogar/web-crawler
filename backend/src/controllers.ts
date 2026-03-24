@@ -1,28 +1,39 @@
 import type { RequestHandler } from "express";
 import * as crawlJobsRepo from "./db/crawlJobsRepo.js";
+import * as crawlWritesRepo from "./db/crawlWritesRepo.js";
 import { startEngineFromPersistedJob } from "./jobResume.js";
 import { CrawlerEngine } from "./crawler.js";
 import { createCallbacks, runningEngines, sseClients } from "./crawlRuntime.js";
 import { SearchEngine } from "./search.js";
+import { crawlScopeFromRow } from "./crawlScope.js";
 import type { CrawlJob, SSEEvent } from "./types.js";
-import type { JobIdParams, SearchQuery, StartCrawlBody } from "./validation.js";
+import type {
+  JobIdParams,
+  JobUrlsQuery,
+  SearchQuery,
+  StartCrawlBody,
+} from "./validation.js";
 
 function rowToJobBase(row: crawlJobsRepo.CrawlJobRow): CrawlJob {
+  const isActive = row.is_active === 1;
+  const dbVisited = crawlWritesRepo.countVisitedUrlsForJob(row.job_id);
+  const dbQueued = crawlWritesRepo.countQueuedUrlsForJob(row.job_id);
   return {
     jobId: row.job_id,
     originUrl: row.origin_url,
     maxDepth: row.max_depth,
-    status: row.status as CrawlJob["status"],
-    pagesCrawled: row.pages_crawled,
-    pagesQueued: row.pages_queued,
+    crawlScope: crawlScopeFromRow(row),
+    status: isActive ? (row.status as CrawlJob["status"]) : "deleted",
+    pagesCrawled: dbVisited,
+    pagesQueued: dbQueued,
     createdAt: row.created_at,
     finishedAt: row.finished_at,
-    isActive: row.is_active === 1,
+    isActive,
   };
 }
 
 export const postIndex: RequestHandler = (req, res) => {
-  const { url, maxDepth, rateLimit, maxQueueSize, workerCount } =
+  const { url, maxDepth, rateLimit, maxQueueSize, workerCount, crawlScope } =
     req.validatedBody as StartCrawlBody;
 
   const jobId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -35,6 +46,7 @@ export const postIndex: RequestHandler = (req, res) => {
     rateLimit,
     maxQueueSize,
     workerCount,
+    crawlScope,
   );
 
   const config = {
@@ -44,6 +56,7 @@ export const postIndex: RequestHandler = (req, res) => {
     rateLimit,
     maxQueueSize,
     workerCount,
+    crawlScope,
   };
   const engine = new CrawlerEngine(config, createCallbacks(jobId));
   runningEngines.set(jobId, engine);
@@ -70,14 +83,22 @@ export const getJobById: RequestHandler = (req, res) => {
     return;
   }
 
+  const mapped = rowToJobBase(row);
   const engine = runningEngines.get(jobId);
   const live = engine?.getSnapshot();
 
+  const status: CrawlJob["status"] = !mapped.isActive
+    ? "deleted"
+    : ((live?.status ?? row.status) as CrawlJob["status"]);
+
+  const dbVisited = crawlWritesRepo.countVisitedUrlsForJob(jobId);
+  const dbQueued = crawlWritesRepo.countQueuedUrlsForJob(jobId);
+
   const base = {
-    ...rowToJobBase(row),
-    status: (live?.status ?? row.status) as CrawlJob["status"],
-    pagesCrawled: live?.pagesCrawled ?? row.pages_crawled,
-    pagesQueued: live?.pagesQueued ?? row.pages_queued,
+    ...mapped,
+    status,
+    pagesCrawled: dbVisited,
+    pagesQueued: dbQueued,
     maxQueueSize: live?.maxQueueSize ?? row.max_queue_size,
     currentDepth: live?.currentDepth ?? 0,
     backPressure: live?.backPressure ?? false,
@@ -86,6 +107,30 @@ export const getJobById: RequestHandler = (req, res) => {
   };
 
   res.json(base);
+};
+
+/** Paginated visited URLs or pending queue rows for a job (from SQLite). */
+export const getJobUrls: RequestHandler = (req, res) => {
+  const { jobId } = req.validatedParams as JobIdParams;
+  const { kind, limit, offset } = req.validatedQuery as JobUrlsQuery;
+
+  if (!crawlJobsRepo.findCrawlJobById(jobId)) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  const data =
+    kind === "visited"
+      ? crawlWritesRepo.listVisitedPagedForJob(jobId, limit, offset)
+      : crawlWritesRepo.listQueuePagedForJob(jobId, limit, offset);
+
+  res.json({
+    kind,
+    items: data.items,
+    total: data.total,
+    limit,
+    offset,
+  });
 };
 
 /** Stop crawl: interrupted, queue kept. */

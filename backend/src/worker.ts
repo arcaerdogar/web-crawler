@@ -2,12 +2,19 @@ import { parentPort } from 'node:worker_threads';
 import * as https from 'node:https';
 import * as http from 'node:http';
 import * as zlib from 'node:zlib';
+import type { CrawlScope } from './crawlScope.js';
 
 interface WorkerInput {
   url: string;
   origin: string;
   depth: number;
+  crawlScope?: CrawlScope;
 }
+
+type RedirectPolicy =
+  | { kind: 'unrestricted' }
+  | { kind: 'registrableDomain'; baseDomain: string }
+  | { kind: 'hostname'; hostname: string };
 
 interface WorkerOutput {
   url: string;
@@ -31,7 +38,11 @@ function getBaseDomain(hostname: string): string {
   return parts.slice(-2).join('.');
 }
 
-function fetchUrl(urlStr: string, redirectsLeft = 10, originDomain?: string): Promise<{ body: string; contentType: string; finalUrl: string }> {
+function fetchUrl(
+  urlStr: string,
+  redirectsLeft = 10,
+  policy: RedirectPolicy,
+): Promise<{ body: string; contentType: string; finalUrl: string }> {
   return new Promise((resolve, reject) => {
     let parsedUrl: URL;
     try {
@@ -40,8 +51,6 @@ function fetchUrl(urlStr: string, redirectsLeft = 10, originDomain?: string): Pr
       reject(new Error(`Invalid URL: ${urlStr}`));
       return;
     }
-
-    const baseDomain = originDomain ?? getBaseDomain(parsedUrl.hostname);
 
     const client = parsedUrl.protocol === 'https:' ? https : http;
 
@@ -64,14 +73,22 @@ function fetchUrl(urlStr: string, redirectsLeft = 10, originDomain?: string): Pr
             return;
           }
           const nextUrl = new URL(res.headers.location, urlStr).toString();
-          const nextHost = new URL(nextUrl).hostname;
-          if (getBaseDomain(nextHost) !== baseDomain) {
+          const nextHost = new URL(nextUrl).hostname.toLowerCase();
+          if (policy.kind === 'unrestricted') {
+            // allow any host
+          } else if (policy.kind === 'registrableDomain') {
+            if (getBaseDomain(nextHost) !== policy.baseDomain) {
+              res.resume();
+              reject(new Error(`Redirect to different domain blocked: ${nextUrl}`));
+              return;
+            }
+          } else if (nextHost !== policy.hostname) {
             res.resume();
             reject(new Error(`Redirect to different domain blocked: ${nextUrl}`));
             return;
           }
           res.resume();
-          fetchUrl(nextUrl, redirectsLeft - 1, baseDomain).then(resolve, reject);
+          fetchUrl(nextUrl, redirectsLeft - 1, policy).then(resolve, reject);
           return;
         }
 
@@ -147,8 +164,18 @@ function countFrequencies(tokens: string[]): Record<string, number> {
   return freq;
 }
 
+function redirectPolicyFor(input: WorkerInput): RedirectPolicy {
+  const scope = input.crawlScope ?? 'registrableDomain';
+  const first = new URL(input.url);
+  if (scope === 'unrestricted') return { kind: 'unrestricted' };
+  if (scope === 'hostname') {
+    return { kind: 'hostname', hostname: first.hostname.toLowerCase() };
+  }
+  return { kind: 'registrableDomain', baseDomain: getBaseDomain(first.hostname) };
+}
+
 async function processUrl(input: WorkerInput): Promise<WorkerOutput> {
-  const { body, contentType, finalUrl } = await fetchUrl(input.url);
+  const { body, contentType, finalUrl } = await fetchUrl(input.url, 10, redirectPolicyFor(input));
 
   if (!contentType.includes('text/html')) {
     return { url: finalUrl, origin: input.origin, depth: input.depth, links: [], words: {}, error: null };

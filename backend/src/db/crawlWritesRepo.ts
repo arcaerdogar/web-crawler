@@ -39,6 +39,24 @@ const listVisitedUrlsByJob = db.prepare(
   "SELECT url FROM visited_urls WHERE job_id = ?",
 );
 
+const listVisitedPaged = db.prepare(
+  `SELECT url, depth, crawled_at AS at FROM visited_urls
+   WHERE job_id = ? ORDER BY crawled_at DESC LIMIT ? OFFSET ?`,
+);
+
+const countVisitedByJob = db.prepare(
+  "SELECT COUNT(*) AS n FROM visited_urls WHERE job_id = ?",
+);
+
+const listQueuePaged = db.prepare(
+  `SELECT url, depth, queued_at AS at FROM url_queue
+   WHERE job_id = ? ORDER BY depth ASC, queued_at ASC LIMIT ? OFFSET ?`,
+);
+
+const countQueueByJob = db.prepare(
+  "SELECT COUNT(*) AS n FROM url_queue WHERE job_id = ?",
+);
+
 const deleteAllUrlQueue = db.prepare("DELETE FROM url_queue");
 
 const deleteAllVisitedUrls = db.prepare("DELETE FROM visited_urls");
@@ -90,18 +108,27 @@ export function updateCrawlJobState(params: {
   );
 }
 
+/** Smaller write transactions than “whole page” — shorter locks, acceptable if a crash leaves partial index for one URL. */
+const WORD_INDEX_TX_BATCH = 200;
+
 export function insertWordsForPage(
   words: Record<string, number>,
   pageUrl: string,
   originUrl: string,
   depth: number,
 ): void {
-  const tx = db.transaction(() => {
-    for (const [word, freq] of Object.entries(words)) {
-      insertWord.run(word, pageUrl, originUrl, depth, freq);
-    }
-  });
-  tx();
+  const entries = Object.entries(words);
+  if (entries.length === 0) return;
+
+  for (let i = 0; i < entries.length; i += WORD_INDEX_TX_BATCH) {
+    const slice = entries.slice(i, i + WORD_INDEX_TX_BATCH);
+    const tx = db.transaction(() => {
+      for (const [word, freq] of slice) {
+        insertWord.run(word, pageUrl, originUrl, depth, freq);
+      }
+    });
+    tx();
+  }
 }
 
 export function listQueueRowsForJob(jobId: string): WorkerInput[] {
@@ -111,6 +138,49 @@ export function listQueueRowsForJob(jobId: string): WorkerInput[] {
 export function listVisitedUrlsForJob(jobId: string): string[] {
   const rows = listVisitedUrlsByJob.all(jobId) as Array<{ url: string }>;
   return rows.map((r) => r.url);
+}
+
+export interface JobUrlEntry {
+  url: string;
+  depth: number;
+  at: number;
+}
+
+function countAsNumber(row: { n: number | bigint } | undefined): number {
+  if (row == null) return 0;
+  return Number(row.n);
+}
+
+export function listVisitedPagedForJob(
+  jobId: string,
+  limit: number,
+  offset: number,
+): { items: JobUrlEntry[]; total: number } {
+  const items = listVisitedPaged.all(jobId, limit, offset) as JobUrlEntry[];
+  const totalRow = countVisitedByJob.get(jobId) as { n: number | bigint } | undefined;
+  return { items, total: countAsNumber(totalRow) };
+}
+
+export function listQueuePagedForJob(
+  jobId: string,
+  limit: number,
+  offset: number,
+): { items: JobUrlEntry[]; total: number } {
+  const items = listQueuePaged.all(jobId, limit, offset) as JobUrlEntry[];
+  const totalRow = countQueueByJob.get(jobId) as { n: number | bigint } | undefined;
+  return { items, total: countAsNumber(totalRow) };
+}
+
+/** Row count in `visited_urls` for this job (source of truth for “pages crawled”). */
+export function countVisitedUrlsForJob(jobId: string): number {
+  const totalRow = countVisitedByJob.get(jobId) as { n: number | bigint } | undefined;
+  return countAsNumber(totalRow);
+}
+
+/** Row count in `url_queue` for this job (matches queued URL list). */
+export function countQueuedUrlsForJob(jobId: string): number {
+  const totalRow = countQueueByJob.get(jobId) as { n: number | bigint } | undefined;
+  return countAsNumber(totalRow);
 }
 
 export function deleteAllQueuedUrls(): void {

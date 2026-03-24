@@ -1,6 +1,12 @@
 import request from 'supertest';
 import { app } from '../src/server.js';
-import { closeDb, crawlJobsRepo, resetAllTables, wordIndexRepo } from '../src/db/index.js';
+import {
+  closeDb,
+  crawlJobsRepo,
+  crawlWritesRepo,
+  resetAllTables,
+  wordIndexRepo,
+} from '../src/db/index.js';
 
 beforeEach(() => {
   resetAllTables();
@@ -145,8 +151,59 @@ describe('POST /api/index', () => {
     expect(row).toBeDefined();
     expect(row!.origin_url).toBe('https://example.com');
     expect(row!.status).toBe('running');
+    expect(row!.crawl_scope).toBe('registrableDomain');
 
     await request(app).delete(`/api/jobs/${res.body.jobId}`);
+  });
+
+  it('persists crawlScope hostname', async () => {
+    const res = await request(app)
+      .post('/api/index')
+      .send({
+        url: 'https://example.com',
+        maxDepth: 0,
+        workerCount: 1,
+        maxQueueSize: 100,
+        rateLimit: 5,
+        crawlScope: 'hostname',
+      });
+
+    expect(res.status).toBe(201);
+    const row = crawlJobsRepo.findCrawlJobById(res.body.jobId);
+    expect(row!.crawl_scope).toBe('hostname');
+
+    const getRes = await request(app).get(`/api/jobs/${res.body.jobId}`);
+    expect(getRes.body.crawlScope).toBe('hostname');
+
+    await request(app).delete(`/api/jobs/${res.body.jobId}`);
+  });
+
+  it('persists crawlScope unrestricted', async () => {
+    const res = await request(app)
+      .post('/api/index')
+      .send({
+        url: 'https://example.com',
+        maxDepth: 0,
+        workerCount: 1,
+        maxQueueSize: 100,
+        rateLimit: 5,
+        crawlScope: 'unrestricted',
+      });
+
+    expect(res.status).toBe(201);
+    expect(crawlJobsRepo.findCrawlJobById(res.body.jobId)!.crawl_scope).toBe(
+      'unrestricted',
+    );
+
+    await request(app).delete(`/api/jobs/${res.body.jobId}`);
+  });
+
+  it('returns 400 for invalid crawlScope', async () => {
+    const res = await request(app)
+      .post('/api/index')
+      .send({ url: 'https://example.com', crawlScope: 'nope' });
+
+    expect(res.status).toBe(400);
   });
 });
 
@@ -205,11 +262,12 @@ describe('GET /api/jobs', () => {
     expect(job).toHaveProperty('originUrl', 'https://test.com');
     expect(job).toHaveProperty('maxDepth', 5);
     expect(job).toHaveProperty('status', 'completed');
-    expect(job).toHaveProperty('pagesCrawled', 42);
+    expect(job).toHaveProperty('pagesCrawled', 0);
     expect(job).toHaveProperty('pagesQueued', 0);
     expect(job).toHaveProperty('createdAt', 1234567890);
     expect(job).toHaveProperty('finishedAt', 1234567999);
     expect(job).toHaveProperty('isActive', true);
+    expect(job).toHaveProperty('crawlScope', 'registrableDomain');
   });
 });
 
@@ -231,6 +289,24 @@ describe('GET /api/jobs/:jobId', () => {
       createdAt: 111,
       finishedAt: 222,
     });
+    for (let i = 0; i < 7; i++) {
+      crawlWritesRepo.tryInsertVisited(
+        'job_detail',
+        `https://detail.com/v${i}`,
+        'https://detail.com',
+        0,
+        1000 + i,
+      );
+    }
+    for (let i = 0; i < 12; i++) {
+      crawlWritesRepo.tryInsertQueueItem(
+        `https://detail.com/q${i}`,
+        'https://detail.com',
+        1,
+        'job_detail',
+        2000 + i,
+      );
+    }
 
     const res = await request(app).get('/api/jobs/job_detail');
 
@@ -249,6 +325,74 @@ describe('GET /api/jobs/:jobId', () => {
     expect(res.body.rps).toBe(0);
     expect(res.body.droppedUrls).toBe(0);
     expect(res.body.isActive).toBe(true);
+    expect(res.body.crawlScope).toBe('registrableDomain');
+  });
+});
+
+describe('GET /api/jobs/:jobId/urls', () => {
+  it('returns 404 when job does not exist', async () => {
+    const res = await request(app).get(
+      '/api/jobs/missing_xyz/urls?kind=visited',
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 when kind is missing', async () => {
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'url_job',
+      originUrl: 'https://u.com',
+      maxDepth: 1,
+      status: 'completed',
+      pagesCrawled: 0,
+      pagesQueued: 0,
+      createdAt: 1,
+    });
+    const res = await request(app).get('/api/jobs/url_job/urls');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns visited and queued rows with pagination metadata', async () => {
+    crawlJobsRepo.insertCrawlJobSeed({
+      jobId: 'url_job2',
+      originUrl: 'https://u2.com',
+      maxDepth: 1,
+      status: 'completed',
+      pagesCrawled: 0,
+      pagesQueued: 0,
+      createdAt: 1,
+    });
+    crawlWritesRepo.tryInsertVisited(
+      'url_job2',
+      'https://u2.com/a',
+      'https://u2.com',
+      0,
+      1000,
+    );
+    crawlWritesRepo.tryInsertQueueItem(
+      'https://u2.com/b',
+      'https://u2.com',
+      1,
+      'url_job2',
+      2000,
+    );
+
+    const v = await request(app).get(
+      '/api/jobs/url_job2/urls?kind=visited&limit=10&offset=0',
+    );
+    expect(v.status).toBe(200);
+    expect(v.body.kind).toBe('visited');
+    expect(v.body.total).toBe(1);
+    expect(v.body.items).toHaveLength(1);
+    expect(v.body.items[0].url).toBe('https://u2.com/a');
+    expect(v.body.items[0].depth).toBe(0);
+
+    const q = await request(app).get(
+      '/api/jobs/url_job2/urls?kind=queued&limit=10&offset=0',
+    );
+    expect(q.status).toBe(200);
+    expect(q.body.kind).toBe('queued');
+    expect(q.body.total).toBe(1);
+    expect(q.body.items[0].url).toBe('https://u2.com/b');
   });
 });
 
@@ -333,6 +477,7 @@ describe('DELETE /api/jobs/:jobId', () => {
     const j = list.body.find((x: { jobId: string }) => x.jobId === 'soft_del');
     expect(j).toBeDefined();
     expect(j.isActive).toBe(false);
+    expect(j.status).toBe('deleted');
   });
 });
 

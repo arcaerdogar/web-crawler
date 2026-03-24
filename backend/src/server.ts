@@ -6,6 +6,7 @@ import {
   deleteJobById,
   getJobById,
   getJobStatusStream,
+  getJobUrls,
   getJobs,
   getSearch,
   postIndex,
@@ -14,6 +15,7 @@ import {
 } from "./controllers.js";
 import {
   jobIdParamSchema,
+  jobUrlsQuerySchema,
   searchQuerySchema,
   startCrawlBodySchema,
 } from "./validation.js";
@@ -35,6 +37,12 @@ app.options("*", (_req, res) => res.sendStatus(204));
 
 app.post("/api/index", validateBody(startCrawlBodySchema), postIndex);
 app.get("/api/jobs", getJobs);
+app.get(
+  "/api/jobs/:jobId/urls",
+  validateParams(jobIdParamSchema),
+  validateQuery(jobUrlsQuerySchema),
+  getJobUrls,
+);
 app.get("/api/jobs/:jobId", validateParams(jobIdParamSchema), getJobById);
 app.post(
   "/api/jobs/:jobId/stop",

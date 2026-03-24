@@ -106,13 +106,20 @@ export class CrawlerEngine {
         this.releaseWorker(worker);
         resolve(output);
       });
-      worker.postMessage(input);
+      worker.postMessage({
+        ...input,
+        crawlScope: this.config.crawlScope,
+      });
     });
   }
 
   async start(): Promise<void> {
     if (this.queue.length === 0) {
-      const normalized = normalizeUrl(this.config.url, this.config.url);
+      const normalized = normalizeUrl(
+        this.config.url,
+        this.config.url,
+        this.config.crawlScope,
+      );
       const startUrl = normalized ?? this.config.url;
       const item: WorkerInput = { url: startUrl, origin: startUrl, depth: 0 };
       this.queue.push(item);
@@ -123,8 +130,6 @@ export class CrawlerEngine {
     let lastRpsCount = 0;
 
     while (this.queue.length > 0 && !this.stopped) {
-      await this.rateLimiter.wait();
-
       const batchSize = Math.min(this.availableWorkers.length, this.queue.length);
       if (batchSize === 0) {
         await new Promise(r => setTimeout(r, 50));
@@ -143,6 +148,7 @@ export class CrawlerEngine {
             deleteQueuedUrl(this.config.jobId, item.url);
             return { tag: 'skip-ttl' as const, item };
           }
+          await this.rateLimiter.wait();
           const output = await this.dispatchToWorker(item);
           return { tag: 'crawled' as const, item, output };
         }),
@@ -194,7 +200,7 @@ export class CrawlerEngine {
           duplicate: 0,
         };
         for (const link of result.links) {
-          const normalized = normalizeUrl(link, origin);
+          const normalized = normalizeUrl(link, origin, this.config.crawlScope);
           if (normalized === null) { filtered.crossDomain++; continue; }
           if (this.visited.has(normalized)) { filtered.visited++; continue; }
           if (wasCrawledWithin(normalized, RECENT_CRAWL_MS)) { filtered.recentDb++; continue; }

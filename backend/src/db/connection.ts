@@ -10,6 +10,8 @@ const db: SqliteDatabase = new Database(dbPath);
 
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+/** Lets readers wait briefly instead of failing while crawlers hold write transactions (word index batches). */
+db.pragma("busy_timeout = 5000");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS visited_urls (
@@ -51,7 +53,9 @@ db.exec(`
     is_active     INTEGER NOT NULL DEFAULT 1,
     rate_limit    INTEGER NOT NULL DEFAULT 5,
     max_queue_size INTEGER NOT NULL DEFAULT 1000,
-    worker_count  INTEGER NOT NULL DEFAULT 4
+    worker_count  INTEGER NOT NULL DEFAULT 4,
+    crawl_scope TEXT NOT NULL DEFAULT 'registrableDomain'
+      CHECK(crawl_scope IN ('hostname','registrableDomain','unrestricted'))
   );
 
   CREATE INDEX IF NOT EXISTS idx_word ON word_index(word);
@@ -132,6 +136,21 @@ function migrateCrawlJobsColumns(): void {
     db.exec(
       "ALTER TABLE crawl_jobs ADD COLUMN worker_count INTEGER NOT NULL DEFAULT 4",
     );
+  }
+  if (!cols.includes("allow_subdomains")) {
+    db.exec(
+      "ALTER TABLE crawl_jobs ADD COLUMN allow_subdomains INTEGER NOT NULL DEFAULT 1",
+    );
+  }
+  if (!cols.includes("crawl_scope")) {
+    db.exec(
+      "ALTER TABLE crawl_jobs ADD COLUMN crawl_scope TEXT NOT NULL DEFAULT 'registrableDomain'",
+    );
+    if (tableColumnNames("crawl_jobs").includes("allow_subdomains")) {
+      db.exec(
+        "UPDATE crawl_jobs SET crawl_scope = 'hostname' WHERE allow_subdomains = 0",
+      );
+    }
   }
 }
 

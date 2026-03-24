@@ -1,7 +1,19 @@
 import { useSearch } from '../hooks/useSearch.ts';
 
 export function SearchPanel() {
-  const { query, setQuery, mode, setMode, results, loading, offset, limit, nextPage, prevPage } = useSearch();
+  const {
+    query,
+    setQuery,
+    searchedQuery,
+    mode,
+    setMode,
+    results,
+    loading,
+    offset,
+    limit,
+    nextPage,
+    prevPage,
+  } = useSearch();
 
   const endIndex = results ? Math.min(offset + limit, results.total) : 0;
 
@@ -22,12 +34,14 @@ export function SearchPanel() {
 
       <div className="search-mode-toggle">
         <button
+          type="button"
           className={`toggle-btn ${mode === 'exact' ? 'active' : ''}`}
           onClick={() => setMode('exact')}
         >
           Exact
         </button>
         <button
+          type="button"
           className={`toggle-btn ${mode === 'prefix' ? 'active' : ''}`}
           onClick={() => setMode('prefix')}
         >
@@ -57,18 +71,18 @@ export function SearchPanel() {
           </div>
 
           <div className="pagination">
-            <button className="btn" onClick={prevPage} disabled={offset === 0}>
+            <button type="button" className="btn" onClick={prevPage} disabled={offset === 0}>
               Previous
             </button>
-            <button className="btn" onClick={nextPage} disabled={offset + limit >= results.total}>
+            <button type="button" className="btn" onClick={nextPage} disabled={offset + limit >= results.total}>
               Next
             </button>
           </div>
         </>
       )}
 
-      {results && results.total === 0 && query.trim().length > 0 && (
-        <p className="no-results">No results found for "{query}"</p>
+      {results && results.total === 0 && searchedQuery.trim().length > 0 && (
+        <p className="no-results">No results found for "{searchedQuery}"</p>
       )}
     </div>
   );

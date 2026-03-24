@@ -29,6 +29,28 @@ describe('normalizeUrl', () => {
       .toBe('https://en.wikipedia.org/');
   });
 
+  it('rejects other subdomains when scope is hostname', () => {
+    expect(normalizeUrl('https://blog.example.com/post', base, 'hostname')).toBeNull();
+    expect(normalizeUrl('https://www.example.com/page', base, 'hostname')).toBeNull();
+    expect(normalizeUrl('https://example.com/about', base, 'hostname')).toBe('https://example.com/about');
+  });
+
+  it('allows exact hostname when scope is hostname', () => {
+    const blogBase = 'https://blog.example.com';
+    expect(normalizeUrl('/p', blogBase, 'hostname')).toBe('https://blog.example.com/p');
+    expect(normalizeUrl('https://blog.example.com/x', blogBase, 'hostname')).toBe('https://blog.example.com/x');
+    expect(normalizeUrl('https://www.example.com/', blogBase, 'hostname')).toBeNull();
+  });
+
+  it('allows any http(s) host when scope is unrestricted', () => {
+    expect(normalizeUrl('https://other.com/page', base, 'unrestricted')).toBe('https://other.com/page');
+    expect(normalizeUrl('https://blog.example.com/x', base, 'unrestricted')).toBe('https://blog.example.com/x');
+  });
+
+  it('still rejects non-http protocols when unrestricted', () => {
+    expect(normalizeUrl('ftp://other.com/file', base, 'unrestricted')).toBeNull();
+  });
+
   it('rejects non-http protocols', () => {
     expect(normalizeUrl('ftp://example.com/file', base)).toBeNull();
     expect(normalizeUrl('mailto:user@example.com', base)).toBeNull();

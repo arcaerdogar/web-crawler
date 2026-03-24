@@ -1,7 +1,19 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { useCrawlerSSE } from '../hooks/useCrawlerSSE.ts';
 import { stopJob, restartJob, getJob, deleteJob } from '../api/client.ts';
-import type { CrawlJob, CrawlStats, JobDetail } from '../types.ts';
+import { JobUrlLists } from './JobUrlLists.tsx';
+import type { CrawlJob, CrawlStats, CrawlScope, JobDetail } from '../types.ts';
+
+function crawlScopeLabel(s: CrawlScope): string {
+  switch (s) {
+    case 'hostname':
+      return 'yalnızca hostname';
+    case 'unrestricted':
+      return 'kısıtsız (tüm http/https linkler)';
+    default:
+      return 'aynı kök domain (alt alan adları dahil)';
+  }
+}
 
 interface Props {
   jobId: string;
@@ -24,16 +36,35 @@ function toCrawlStats(j: CrawlJob | JobDetail): CrawlStats {
 }
 
 export function CrawlerDashboard({ jobId, job }: Props) {
+  const [listDbTotals, setListDbTotals] = useState<{
+    visited: number;
+    queued: number;
+  } | null>(null);
+  const [urlListRefreshKey, setUrlListRefreshKey] = useState(0);
   const [resumed, setResumed] = useState(false);
   const [stopped, setStopped] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [detail, setDetail] = useState<JobDetail | null>(null);
+  /** False until first GET /jobs/:id for this jobId settles (skipped when parent passes seed `job`). */
+  const [detailHydrated, setDetailHydrated] = useState(() => job != null);
+
+  useEffect(() => {
+    setDetailHydrated(job != null);
+    setDetail(null);
+    setListDbTotals(null);
+  }, [jobId, job]);
+
+  useEffect(() => {
+    if (urlListRefreshKey === 0) return;
+    setListDbTotals(null);
+  }, [urlListRefreshKey]);
 
   const refreshDetail = useCallback(() => {
-    getJob(jobId)
+    return getJob(jobId)
       .then(setDetail)
-      .catch(() => setDetail(null));
+      .catch(() => setDetail(null))
+      .finally(() => setDetailHydrated(true));
   }, [jobId]);
 
   useEffect(() => {
@@ -44,6 +75,7 @@ export function CrawlerDashboard({ jobId, job }: Props) {
   /** Stop sonrası SSE kapat; tamamlanınca API'den status güncellenene kadar açık kalabilir */
   const streamActive =
     !stopped &&
+    base?.status !== 'deleted' &&
     (resumed || base == null || base.status === 'running');
   const { stats, logs, done } = useCrawlerSSE(jobId, streamActive);
   const logRef = useRef<HTMLDivElement>(null);
@@ -54,6 +86,7 @@ export function CrawlerDashboard({ jobId, job }: Props) {
     if (done) {
       setResumed(false);
       refreshDetail();
+      setUrlListRefreshKey(k => k + 1);
     }
   }, [done, refreshDetail]);
 
@@ -68,6 +101,7 @@ export function CrawlerDashboard({ jobId, job }: Props) {
     setStopped(true);
     setResumed(false);
     refreshDetail();
+    setUrlListRefreshKey(k => k + 1);
   };
 
   const handleRestart = async () => {
@@ -102,6 +136,7 @@ export function CrawlerDashboard({ jobId, job }: Props) {
   const canRestart = finished && !restarting && jobActive;
 
   const statusLabel = (() => {
+    if (base?.status === 'deleted') return 'deleted';
     if (resumed && !done) return 'running';
     if (stopped) return 'Stopped';
     if (base?.status === 'interrupted') return 'Interrupted';
@@ -109,7 +144,22 @@ export function CrawlerDashboard({ jobId, job }: Props) {
     return base?.status ?? 'running';
   })();
 
-  const displayStats = (() => {
+  if (!detailHydrated && job == null) {
+    return (
+      <div className="dashboard">
+        <div className="job-list-loading dashboard-loading" role="status" aria-live="polite">
+          <span className="job-list-spinner" aria-hidden />
+          <span>Loading job details…</span>
+        </div>
+      </div>
+    );
+  }
+
+  const rawDisplayStats = (() => {
+    if (base?.status === 'deleted' || detail?.status === 'deleted') {
+      const src = detail ?? base;
+      return src ? toCrawlStats(src as JobDetail) : null;
+    }
     if (stopped) {
       if (detail?.status === 'interrupted') return toCrawlStats(detail);
       const snap = stats ?? (base ? toCrawlStats(base) : null);
@@ -119,21 +169,34 @@ export function CrawlerDashboard({ jobId, job }: Props) {
     return stats ?? (base ? toCrawlStats(base) : null);
   })();
 
+  const displayStats =
+    rawDisplayStats && listDbTotals
+      ? {
+          ...rawDisplayStats,
+          pagesCrawled: listDbTotals.visited,
+          pagesQueued: listDbTotals.queued,
+        }
+      : rawDisplayStats;
+
   return (
     <div className="dashboard">
       <div className="dashboard-header">
         <div className="dashboard-title">
           <h2>Job: {jobId}</h2>
-          {base && <p className="dashboard-url">{base.originUrl}</p>}
+          {base && (
+            <>
+              <p className="dashboard-url">{base.originUrl}</p>
+              <p className="dashboard-meta">
+                Tarama kapsamı: {crawlScopeLabel(base.crawlScope)}
+              </p>
+            </>
+          )}
         </div>
         <div className="dashboard-actions">
-          {!jobActive && (
-            <span className="badge badge-inactive">Removed from list</span>
-          )}
           {viewingLiveLogs && !finished && jobActive && (
             <button className="btn btn-danger" onClick={handleStop}>Stop Crawl</button>
           )}
-          {finished && (
+          {(finished || base?.status === 'deleted') && (
             <>
               <span className={`badge badge-${statusLabel.toLowerCase()}`}>{statusLabel}</span>
               {canRestart && (
@@ -189,6 +252,15 @@ export function CrawlerDashboard({ jobId, job }: Props) {
             <span className={`badge badge-${displayStats.status}`}>{displayStats.status}</span>
           </div>
         </div>
+      )}
+
+      {base && (
+        <JobUrlLists
+          jobId={jobId}
+          live={viewingLiveLogs && base.status !== 'deleted'}
+          refreshKey={urlListRefreshKey}
+          onTotalsChange={setListDbTotals}
+        />
       )}
 
       {viewingLiveLogs && (

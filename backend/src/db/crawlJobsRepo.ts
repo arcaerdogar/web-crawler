@@ -1,5 +1,7 @@
 import { getDb } from "./connection.js";
 
+import type { CrawlScope } from "../crawlScope.js";
+
 export interface CrawlJobRow {
   job_id: string;
   origin_url: string;
@@ -13,6 +15,9 @@ export interface CrawlJobRow {
   rate_limit: number;
   max_queue_size: number;
   worker_count: number;
+  crawl_scope?: string | null;
+  /** Legacy column; optional on rows from older schemas. */
+  allow_subdomains?: number;
 }
 
 const db = getDb();
@@ -20,8 +25,8 @@ const db = getDb();
 const insertRunningJob = db.prepare(
   `INSERT INTO crawl_jobs (
     job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at,
-    is_active, rate_limit, max_queue_size, worker_count
-  ) VALUES (?, ?, ?, 'running', 0, 0, ?, 1, ?, ?, ?)`,
+    is_active, rate_limit, max_queue_size, worker_count, crawl_scope
+  ) VALUES (?, ?, ?, 'running', 0, 0, ?, 1, ?, ?, ?, ?)`,
 );
 
 const listJobsDesc = db.prepare(
@@ -63,15 +68,15 @@ const softDeleteStmt = db.prepare(
 const insertJobFull = db.prepare(
   `INSERT INTO crawl_jobs (
     job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at,
-    is_active, rate_limit, max_queue_size, worker_count
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    is_active, rate_limit, max_queue_size, worker_count, crawl_scope
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 );
 
 const insertJobWithFinished = db.prepare(
   `INSERT INTO crawl_jobs (
     job_id, origin_url, max_depth, status, pages_crawled, pages_queued, created_at, finished_at,
-    is_active, rate_limit, max_queue_size, worker_count
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    is_active, rate_limit, max_queue_size, worker_count, crawl_scope
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 );
 
 export function insertRunningCrawlJob(
@@ -82,6 +87,7 @@ export function insertRunningCrawlJob(
   rateLimit: number,
   maxQueueSize: number,
   workerCount: number,
+  crawlScope: CrawlScope,
 ): void {
   insertRunningJob.run(
     jobId,
@@ -91,6 +97,7 @@ export function insertRunningCrawlJob(
     rateLimit,
     maxQueueSize,
     workerCount,
+    crawlScope,
   );
 }
 
@@ -146,6 +153,7 @@ export function insertCrawlJobSeed(params: {
   pagesCrawled: number;
   pagesQueued: number;
   createdAt: number;
+  crawlScope?: CrawlScope;
 }): void {
   insertJobFull.run(
     params.jobId,
@@ -159,6 +167,7 @@ export function insertCrawlJobSeed(params: {
     5,
     1000,
     4,
+    params.crawlScope ?? "registrableDomain",
   );
 }
 
@@ -172,6 +181,7 @@ export function insertCrawlJobSeedWithFinishedAt(params: {
   pagesQueued: number;
   createdAt: number;
   finishedAt: number | null;
+  crawlScope?: CrawlScope;
 }): void {
   insertJobWithFinished.run(
     params.jobId,
@@ -186,5 +196,6 @@ export function insertCrawlJobSeedWithFinishedAt(params: {
     5,
     1000,
     4,
+    params.crawlScope ?? "registrableDomain",
   );
 }

@@ -1,4 +1,10 @@
-import type { StartCrawlRequest, CrawlJob, JobDetail, SearchResponse } from '../types.ts';
+import type {
+  StartCrawlRequest,
+  CrawlJob,
+  JobDetail,
+  JobUrlsResponse,
+  SearchResponse,
+} from '../types.ts';
 
 const BASE = '/api';
 
@@ -24,6 +30,27 @@ export async function getJobs(): Promise<CrawlJob[]> {
 export async function getJob(jobId: string): Promise<JobDetail> {
   const res = await fetch(`${BASE}/jobs/${encodeURIComponent(jobId)}`);
   if (!res.ok) throw new Error('Failed to fetch job');
+  return res.json();
+}
+
+export async function getJobUrls(
+  jobId: string,
+  kind: 'visited' | 'queued',
+  limit = 200,
+  offset = 0,
+): Promise<JobUrlsResponse> {
+  const params = new URLSearchParams({
+    kind,
+    limit: String(limit),
+    offset: String(offset),
+  });
+  const res = await fetch(
+    `${BASE}/jobs/${encodeURIComponent(jobId)}/urls?${params}`,
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? 'Failed to fetch URLs');
+  }
   return res.json();
 }
 

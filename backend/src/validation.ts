@@ -33,6 +33,10 @@ export const startCrawlBodySchema = z.object({
     .max(8, "workerCount must be between 1 and 8")
     .optional()
     .default(4),
+  crawlScope: z
+    .enum(["hostname", "registrableDomain", "unrestricted"])
+    .optional()
+    .default("registrableDomain"),
 });
 
 export type StartCrawlBody = z.infer<typeof startCrawlBodySchema>;
@@ -68,6 +72,14 @@ export const jobIdParamSchema = z.object({
 });
 
 export type JobIdParams = z.infer<typeof jobIdParamSchema>;
+
+export const jobUrlsQuerySchema = z.object({
+  kind: z.enum(["visited", "queued"]),
+  limit: z.coerce.number().int().min(1).max(1000).default(200),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export type JobUrlsQuery = z.infer<typeof jobUrlsQuerySchema>;
 
 export function formatZodError(error: z.ZodError): string {
   return error.issues

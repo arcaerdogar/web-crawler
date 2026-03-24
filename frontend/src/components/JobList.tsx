@@ -1,31 +1,91 @@
 import { useState, useEffect, type MouseEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getJobs, deleteJob } from '../api/client.ts';
-import { CrawlerDashboard } from './CrawlerDashboard.tsx';
 import type { CrawlJob } from '../types.ts';
 
-interface Props {
-  focusJobId: string | null;
-  onFocusConsumed: () => void;
+function JobsTable({
+  jobs,
+  showRemove,
+  onSelect,
+  onRemove,
+}: {
+  jobs: CrawlJob[];
+  showRemove: boolean;
+  onSelect: (id: string) => void;
+  onRemove: (e: MouseEvent, id: string) => void;
+}) {
+  const formatDate = (epoch: number) => new Date(epoch).toLocaleString();
+
+  return (
+    <table className="jobs-table">
+      <thead>
+        <tr>
+          <th>Job ID</th>
+          <th>Origin URL</th>
+          <th>Status</th>
+          <th>Pages</th>
+          <th>Started</th>
+          {showRemove && <th></th>}
+        </tr>
+      </thead>
+      <tbody>
+        {jobs.map(job => (
+          <tr key={job.jobId} onClick={() => onSelect(job.jobId)} className="job-row">
+            <td className="job-id">{job.jobId.slice(0, 16)}...</td>
+            <td className="job-url">{job.originUrl}</td>
+            <td>
+              <span className={`badge badge-${job.status}`}>{job.status}</span>
+            </td>
+            <td>{job.pagesCrawled}</td>
+            <td>{formatDate(job.createdAt)}</td>
+            {showRemove && (
+              <td>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={e => onRemove(e, job.jobId)}
+                >
+                  Remove
+                </button>
+              </td>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
-export function JobList({ focusJobId, onFocusConsumed }: Props) {
+export function JobList() {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<CrawlJob[]>([]);
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [initialLoad, setInitialLoad] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (focusJobId) {
-      setSelectedJobId(focusJobId);
-      onFocusConsumed();
-    }
-  }, [focusJobId, onFocusConsumed]);
-
-  useEffect(() => {
-    const fetchJobs = () => {
-      getJobs().then(setJobs).catch(() => {});
+    let cancelled = false;
+    const fetchJobs = (isInitial: boolean) => {
+      getJobs()
+        .then(data => {
+          if (cancelled) return;
+          setJobs(data);
+          setLoadError(null);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (isInitial) setLoadError('Jobs could not be loaded.');
+        })
+        .finally(() => {
+          if (!cancelled && isInitial) setInitialLoad(false);
+        });
     };
-    fetchJobs();
-    const interval = setInterval(fetchJobs, 5000);
-    return () => clearInterval(interval);
+    fetchJobs(true);
+    const interval = setInterval(() => fetchJobs(false), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   const handleRemove = (e: MouseEvent, id: string) => {
@@ -34,16 +94,36 @@ export function JobList({ focusJobId, onFocusConsumed }: Props) {
     deleteJob(id).then(() => getJobs().then(setJobs)).catch(() => {});
   };
 
-  const formatDate = (epoch: number) => new Date(epoch).toLocaleString();
+  const activeJobs = jobs.filter(j => j.isActive);
+  const deletedJobs = jobs.filter(j => !j.isActive);
 
-  if (selectedJobId) {
-    const job = jobs.find(j => j.jobId === selectedJobId);
+  if (initialLoad) {
     return (
-      <div className="job-detail-view">
-        <button className="btn btn-secondary back-btn" onClick={() => setSelectedJobId(null)}>
-          &larr; Back to Jobs
-        </button>
-        <CrawlerDashboard jobId={selectedJobId} job={job ?? null} />
+      <div className="job-list">
+        <h2>Crawl Jobs</h2>
+        <div className="job-list-loading" role="status" aria-live="polite">
+          <span className="job-list-spinner" aria-hidden />
+          <span>Loading jobs…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError && jobs.length === 0) {
+    return (
+      <div className="job-list">
+        <h2>Crawl Jobs</h2>
+        <p className="empty-state">{loadError}</p>
+        <p className="empty-state subtle">If a crawl is running, the server may be busy writing to the database; try again in a moment.</p>
+      </div>
+    );
+  }
+
+  if (jobs.length === 0) {
+    return (
+      <div className="job-list">
+        <h2>Crawl Jobs</h2>
+        <p className="empty-state">No crawl jobs yet. Start one from the Crawler tab.</p>
       </div>
     );
   }
@@ -51,53 +131,47 @@ export function JobList({ focusJobId, onFocusConsumed }: Props) {
   return (
     <div className="job-list">
       <h2>Crawl Jobs</h2>
-      {jobs.length === 0 ? (
-        <p className="empty-state">No crawl jobs yet. Start one from the Crawler tab.</p>
-      ) : (
-        <table className="jobs-table">
-          <thead>
-            <tr>
-              <th>Job ID</th>
-              <th>Origin URL</th>
-              <th>Status</th>
-              <th>List</th>
-              <th>Pages</th>
-              <th>Started</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map(job => (
-              <tr key={job.jobId} onClick={() => setSelectedJobId(job.jobId)} className="job-row">
-                <td className="job-id">{job.jobId.slice(0, 16)}...</td>
-                <td className="job-url">{job.originUrl}</td>
-                <td>
-                  <span className={`badge badge-${job.status}`}>{job.status}</span>
-                </td>
-                <td>
-                  {job.isActive ? (
-                    <span className="badge badge-running">active</span>
-                  ) : (
-                    <span className="badge badge-inactive">removed</span>
-                  )}
-                </td>
-                <td>{job.pagesCrawled}</td>
-                <td>{formatDate(job.createdAt)}</td>
-                <td>
-                  {job.isActive && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={e => handleRemove(e, job.jobId)}
-                    >
-                      Remove
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      <section className="job-section">
+        <h3 className="job-section-title">Active jobs</h3>
+        {activeJobs.length === 0 ? (
+          <p className="empty-state subtle">No active jobs.</p>
+        ) : (
+          <JobsTable
+            jobs={activeJobs}
+            showRemove
+            onSelect={id => navigate(`/jobs/${id}`)}
+            onRemove={handleRemove}
+          />
+        )}
+      </section>
+
+      {deletedJobs.length > 0 && (
+        <div className="job-deleted-toggle">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setShowDeleted(v => !v)}
+            aria-expanded={showDeleted}
+          >
+            {showDeleted
+              ? 'Hide deleted jobs'
+              : `Show deleted jobs (${deletedJobs.length})`}
+          </button>
+        </div>
+      )}
+
+      {showDeleted && deletedJobs.length > 0 && (
+        <section className="job-section job-section-deleted">
+          <h3 className="job-section-title">Deleted jobs</h3>
+          <p className="job-section-hint">Removed from the active list; search index data is kept.</p>
+          <JobsTable
+            jobs={deletedJobs}
+            showRemove={false}
+            onSelect={id => navigate(`/jobs/${id}`)}
+            onRemove={handleRemove}
+          />
+        </section>
       )}
     </div>
   );

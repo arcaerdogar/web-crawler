@@ -94,7 +94,7 @@ npm start
 ## Features
 
 - Concurrent crawling with configurable worker threads (1-8)
-- Rate limiting (1-20 requests/second)
+- Rate limiting (1-20 HTTP fetches per second total across all workers, not per worker)
 - Back pressure mechanism with configurable queue size
 - Real-time progress monitoring via Server-Sent Events
 - Search works concurrently during indexing (SQLite WAL mode)

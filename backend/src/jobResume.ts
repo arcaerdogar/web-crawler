@@ -1,4 +1,5 @@
 import { CrawlerEngine } from "./crawler.js";
+import { crawlScopeFromRow } from "./crawlScope.js";
 import * as crawlWritesRepo from "./db/crawlWritesRepo.js";
 import type { CrawlJobRow } from "./db/crawlJobsRepo.js";
 import { createCallbacks, runningEngines } from "./crawlRuntime.js";
@@ -19,11 +20,12 @@ export function startEngineFromPersistedJob(row: CrawlJobRow): void {
     rateLimit: row.rate_limit,
     maxQueueSize: row.max_queue_size,
     workerCount: row.worker_count,
+    crawlScope: crawlScopeFromRow(row),
   };
 
   const engine = new CrawlerEngine(config, createCallbacks(jobId));
   if (queueRows.length > 0 || visited.size > 0) {
-    engine.restoreState(queueRows, visited, row.pages_crawled);
+    engine.restoreState(queueRows, visited, visited.size);
   }
 
   runningEngines.set(jobId, engine);

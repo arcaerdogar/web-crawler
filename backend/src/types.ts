@@ -1,16 +1,22 @@
+import type { CrawlScope } from "./crawlScope.js";
+
+export type { CrawlScope };
+
 export interface StartCrawlRequest {
   url: string;
   maxDepth: number;
   rateLimit: number;
   maxQueueSize: number;
   workerCount: number;
+  crawlScope: CrawlScope;
 }
 
 export interface CrawlJob {
   jobId: string;
   originUrl: string;
   maxDepth: number;
-  status: 'running' | 'completed' | 'interrupted';
+  crawlScope: CrawlScope;
+  status: 'running' | 'completed' | 'interrupted' | 'deleted';
   pagesCrawled: number;
   pagesQueued: number;
   createdAt: number;
@@ -50,6 +56,7 @@ export interface WorkerInput {
   url: string;
   origin: string;
   depth: number;
+  crawlScope?: CrawlScope;
 }
 
 export interface WorkerOutput {

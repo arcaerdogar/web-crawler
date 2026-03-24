@@ -1,16 +1,20 @@
+export type CrawlScope = 'hostname' | 'registrableDomain' | 'unrestricted';
+
 export interface StartCrawlRequest {
   url: string;
   maxDepth: number;
   rateLimit: number;
   maxQueueSize: number;
   workerCount: number;
+  crawlScope: CrawlScope;
 }
 
 export interface CrawlJob {
   jobId: string;
   originUrl: string;
   maxDepth: number;
-  status: 'running' | 'completed' | 'interrupted';
+  crawlScope: CrawlScope;
+  status: 'running' | 'completed' | 'interrupted' | 'deleted';
   pagesCrawled: number;
   pagesQueued: number;
   createdAt: number;
@@ -49,6 +53,20 @@ export interface SearchResult {
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface JobUrlItem {
+  url: string;
+  depth: number;
+  at: number;
+}
+
+export interface JobUrlsResponse {
+  kind: 'visited' | 'queued';
+  items: JobUrlItem[];
   total: number;
   limit: number;
   offset: number;
