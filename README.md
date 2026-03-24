@@ -2,10 +2,13 @@
 
 A functional web crawler and real-time search engine built with TypeScript. The system crawls web pages recursively from a starting URL, builds an inverted index of words, and allows searching the index even while crawling is in progress.
 
+**Repository:** [github.com/arcaerdogar/web-crawler](https://github.com/arcaerdogar/web-crawler)
+
 ## Tech Stack
 
 - **Backend:** Node.js 18+, Express.js, SQLite (better-sqlite3), Worker Threads
-- **Frontend:** React 18, TypeScript, Vite
+- **Frontend:** React 19, TypeScript, Vite, React Router
+- **Validation:** Zod (request bodies and query params)
 - **Database:** SQLite with WAL mode for concurrent read/write
 
 ## Getting Started
@@ -45,38 +48,46 @@ Open http://localhost:5173 in your browser.
 
 ### Production
 
+The API server does **not** serve the built SPA; run the backend and frontend separately (or put both behind a reverse proxy).
+
 ```bash
-# Build backend
+# Build and start backend (API on port 3001)
 cd backend
 npm run build
+npm start
 
-# Build frontend
+# Build frontend, then preview or host `frontend/dist` as static files
 cd ../frontend
 npm run build
-
-# Start backend (serves API)
-cd ../backend
-npm start
+npm run preview   # serves SPA only; /api calls need same-origin proxy or CORS changes (dev uses Vite proxy in vite.config.ts)
 ```
+
+Optional: set **`DATABASE_PATH`** to choose where SQLite stores data (defaults to `backend/crawler.db` relative to the process working directory).
 
 ## Architecture
 
 ### Backend
 
-- **server.ts** - Express API server with REST endpoints and SSE streaming
-- **crawler.ts** - CrawlerEngine class coordinating worker threads
-- **worker.ts** - Worker thread for fetching and parsing web pages
-- **search.ts** - SearchEngine class for querying the inverted index
-- **db.ts** - SQLite database setup with WAL mode
-- **rateLimiter.ts** - Request rate limiting
-- **normalizeUrl.ts** - URL normalization and deduplication
+- **server.ts** — Express app: routes, CORS, startup resume of `running` jobs
+- **controllers.ts** — HTTP handlers (jobs, search, SSE, URL lists)
+- **validation.ts** / **validationMiddleware.ts** — Zod schemas for bodies and queries
+- **crawler.ts** — `CrawlerEngine`: queue, workers, rate limit, persistence hooks
+- **worker.ts** — Worker thread: HTTP(S) fetch, link extraction, word frequencies
+- **jobResume.ts** / **crawlRuntime.ts** — Restart and in-memory engine registry
+- **search.ts** — Search over `word_index` via **wordIndexRepo**
+- **db/connection.ts** — SQLite open, WAL, migrations, schema
+- **db/crawlWritesRepo.ts** — Queue, visited rows, word inserts, paginated URL lists
+- **db/crawlJobsRepo.ts** — Job metadata CRUD
+- **rateLimiter.ts** — Global request pacing (shared across workers)
+- **normalizeUrl.ts** / **crawlScope.ts** — URL normalization and crawl boundary rules
+- **parser.ts** — Query tokenization for search
 
 ### Frontend
 
-- **CrawlerForm** - Start new crawl jobs with configurable parameters
-- **CrawlerDashboard** - Real-time monitoring via SSE (pages crawled, queue depth, RPS)
-- **SearchPanel** - Search the index with debounced input and pagination
-- **JobList** - View and manage all crawl jobs
+- **CrawlerForm** — Start crawls (`maxDepth`, `rateLimit`, `maxQueueSize`, `workerCount`, **`crawlScope`**)
+- **CrawlerDashboard** — Live stats via SSE; **JobUrlLists** for paginated visited / queued URLs
+- **SearchPanel** — Debounced search with pagination
+- **JobList** — Jobs table; stop, soft-delete, restart
 
 ### API Endpoints
 
@@ -85,11 +96,12 @@ npm start
 | POST | /api/index | Start a new crawl job |
 | GET | /api/jobs | List all jobs (includes `isActive`; soft-deleted stay visible) |
 | GET | /api/jobs/:jobId | Job detail + live stats when running |
+| GET | /api/jobs/:jobId/urls | Paginated URLs: query `kind=visited` or `kind=queued`, plus `limit`, `offset` |
 | POST | /api/jobs/:jobId/stop | Stop crawl (`interrupted`); **keeps** URL queue for resume |
 | DELETE | /api/jobs/:jobId | Soft delete (`is_active=0`); **clears** queue; `visited_urls` / `word_index` unchanged |
 | POST | /api/jobs/:jobId/restart | Resume interrupted job from DB queue + per-job visited |
 | GET | /api/status/:jobId | SSE stream for real-time stats |
-| GET | /api/search?q=&limit=&offset= | Search the index |
+| GET | /api/search | Query params: `q`, `limit`, `offset`, optional `mode=exact` or `prefix` |
 
 ## Features
 
@@ -100,7 +112,7 @@ npm start
 - Search works concurrently during indexing (SQLite WAL mode)
 - Crash recovery: jobs still `running` resume automatically on server start (same code path as POST restart)
 - Per-job `visited_urls` and `url_queue` primary keys include `job_id` (same URL may appear in different jobs’ queues)
-- Same-domain only crawling with URL normalization
+- **Crawl scope** (per job, `POST /api/index`): `registrableDomain` (default), `hostname` (single host), or `unrestricted` (any HTTP(S) link within depth/queue limits), with URL normalization and deduplication
 
 ## Observations
 
